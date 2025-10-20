@@ -1,0 +1,119 @@
+#include <ESP8266WiFi.h>
+#include <DHT.h>
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include <Adafruit_BMP085.h>
+#include <ThingSpeak.h>
+
+// ----------------- WIFI and ThingSpeak -----------------
+const char* ssid = "Aaaa";
+const char* password = "Arvin2005";
+
+unsigned long myChannelNumber = 3120781; // ThingSpeak channel number
+const char* myWriteAPIKey = "P52SZVXQ3NX5T0GG";
+
+WiFiClient client;
+
+// ----------------- DHT11 -----------------
+#define DHTPIN 2        // D4 on NodeMCU (GPIO2)
+#define DHTTYPE DHT11
+DHT dht(DHTPIN, DHTTYPE);
+
+// ----------------- BMP180 -----------------
+Adafruit_BMP085 bmp;
+
+// ----------------- Sensors -----------------
+#define LDR_PIN A0      // LDR analog pin
+
+LiquidCrystal_I2C lcd(0x27, 16, 2); // LCD I2C address
+
+void setup() {
+  Serial.begin(115200);
+
+  // I2C for NodeMCU using D5 (SDA) and D6 (SCL)
+  Wire.begin(D5, D6);
+  lcd.init();
+  lcd.backlight();
+
+  dht.begin();
+  pinMode(LDR_PIN, INPUT);
+
+  // Initialize BMP180 sensor
+  if (!bmp.begin()) {
+    Serial.println("BMP180 not detected. Check wiring!");
+    lcd.setCursor(0, 0);
+    lcd.print("BMP180 Error");
+    while (1);
+  }
+
+  // Connect to WiFi
+  WiFi.begin(ssid, password);
+  Serial.print("Connecting to WiFi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\nConnected to WiFi");
+
+  ThingSpeak.begin(client);
+}
+
+void loop() {
+  // -------- Read DHT11 --------
+  float temp = dht.readTemperature();
+  float hum = dht.readHumidity();
+
+  // -------- Read LDR --------
+  int ldrValue = analogRead(LDR_PIN);
+  String lightStatus = (ldrValue < 800) ? "Bright" : "Dark";
+
+  // -------- Read BMP180 --------
+  float bmpTemp = bmp.readTemperature();
+  float pressure = bmp.readPressure() / 100.0; // in hPa
+  float altitude = bmp.readAltitude(101325);   // sea level pressure in Pa
+
+  // -------- Display on LCD --------
+  lcd.clear();
+  if (isnan(temp) || isnan(hum)) {
+    lcd.setCursor(0, 0);
+    lcd.print("DHT Error");
+  } else {
+    lcd.setCursor(0, 0);
+    lcd.print("T:");
+    lcd.print(temp, 1);
+    lcd.print("C ");
+    lcd.print("H:");
+    lcd.print(hum, 0);
+    lcd.print("%");
+  }
+
+  lcd.setCursor(0, 1);
+  lcd.print(lightStatus);
+  lcd.print(" P:");
+  lcd.print(pressure, 0);
+  lcd.print("hPa");
+
+  // -------- Print to Serial --------
+  Serial.print("Temp (DHT): "); Serial.print(temp); Serial.print(" °C ");
+  Serial.print("Humidity: "); Serial.print(hum); Serial.print(" % ");
+  Serial.print("Light: "); Serial.print(ldrValue); Serial.print(" - "); Serial.println(lightStatus);
+  Serial.print("Temp (BMP): "); Serial.print(bmpTemp); Serial.print(" °C ");
+  Serial.print("Pressure: "); Serial.print(pressure); Serial.print(" hPa ");
+  Serial.print("Altitude: "); Serial.print(altitude); Serial.println(" m");
+
+  // -------- Upload to ThingSpeak --------
+  ThingSpeak.setField(1, temp);
+  ThingSpeak.setField(2, hum);
+  ThingSpeak.setField(3, ldrValue);
+  ThingSpeak.setField(4, pressure);
+  ThingSpeak.setField(5, altitude);
+
+  int response = ThingSpeak.writeFields(myChannelNumber, myWriteAPIKey);
+  if (response == 200) {
+    Serial.println("Channel update successful.");
+  } else {
+    Serial.println("Problem updating channel. HTTP error code " + String(response));
+  }
+
+  delay(20000); // 20 seconds delay (ThingSpeak free limit)
+}
